@@ -1,0 +1,215 @@
+import os
+import pandas as pd
+
+
+def Task_1_summary_extraction(df):
+    """
+    This function extracts and summarizes key performance metrics from the dataset. 
+    It identifies key sections such as "Summary" and collects relevant performance data.
+
+    - Reads the dataset and identifies the section containing key summary metrics.
+    - Extracts important values into a structured DataFrame.
+    - Returns a DataFrame summarizing the extracted results.
+    """
+    summary_data = []  # Stores extracted summary data
+    content = df.iloc[:, 0].tolist()  # Convert first column to a list of text values
+
+    extracting = False  # Flag to track when to start collecting summary content
+    for row in content:
+        row = str(row).strip()
+
+        # Step 1: Detect the start of the "Summary" section
+        if "Summary" in row:
+            extracting = True
+            continue
+
+        # Step 2: Collect summary metrics
+        if extracting:
+            if row == "":  # Stop collecting when an empty row is found
+                break
+            columns = [col.strip() for col in row.split("|") if col.strip()]
+            if columns:
+                summary_data.append(columns)
+
+    # Convert extracted content into a DataFrame
+    df_summary = pd.DataFrame(summary_data)
+    
+    return df_summary
+
+
+def Task_2_eval_order_SCD_1_3_5(df):
+    """
+    This function extracts and organizes content related to "ORDER EVALUATION I" and "ORDER EVALUATION II".
+    It processes the DataFrame and structures the data into a dictionary where:
+    
+    - The main keys are "ORDER EVALUATION I" or "ORDER EVALUATION II".
+    - Each of these keys contains sub-keys representing different "Order" numbers.
+    - Each order contains a table extracted from the DataFrame.
+    """
+    table_dict = {}  # Dictionary to store processed table data
+    content = df.iloc[:, 0].tolist()
+
+    current_key = None  # Stores current "ORDER EVALUATION I" or "ORDER EVALUATION II"
+    current_order = None  # Stores the current order number
+    content_started = False  # Flag to indicate when we are inside the table data
+
+    for i, row in enumerate(content):
+        row = str(row).strip()
+
+        # Step 1: Identify "ORDER EVALUATION I" or "ORDER EVALUATION II"
+        if "ORDER EVALUATION I" in row or "ORDER EVALUATION II" in row:
+            current_key = row
+            if i + 4 < len(content) and "Order :" in str(content[i + 4]):
+                current_order = str(content[i + 4]).split(":")[1].strip()
+                table_dict.setdefault(current_key, {}).setdefault(current_order, [])
+            continue
+
+        # Step 2: Detect table start and extract data
+        if row.startswith("+-") and not content_started:
+            continue
+        elif "+=" in row:
+            content_started = True
+            continue
+
+        if content_started:
+            if row.startswith("+-"):
+                content_started = False
+                continue
+            columns = [col.strip() for col in row.split("|") if col.strip()]
+            if columns and current_key and current_order:
+                table_dict[current_key][current_order].append(columns)
+
+    for key in table_dict:
+        for order in table_dict[key]:
+            df_table = pd.DataFrame(table_dict[key][order])
+            df_table["Order Evaluation"] = key
+            df_table["Order"] = order
+            table_dict[key][order] = df_table
+
+    return table_dict
+
+
+def extract_OEIII_WO_MCC_content(df):
+    """
+    This function extracts ORDER EVALUATION III data for "MCC" and "WQ" parameters,
+    categorized by direction (X or Y). It processes the DataFrame and structures the data into a dictionary where:
+    
+    - The main keys are "MCC" or "WQ" (representing the parameter type).
+    - Each of these keys contains sub-keys "Direction_X" or "Direction_Y".
+    - Each direction contains a table extracted from the DataFrame.
+    """
+    table_dict = {}
+    content = df.iloc[:, 0].tolist()
+
+    current_key = None
+    current_direction = None
+    table_started = False
+    content_started = False
+    plus_count = 0
+
+    for i, row in enumerate(content):
+        row = str(row).strip()
+
+        if "ORDER EVALUATION III" in row:
+            if "Parameter: MCC" in str(content[i + 1]):
+                current_key = "MCC"
+            elif "Parameter: WQ" in str(content[i + 1]):
+                current_key = "WQ"
+
+            if "Direction: Y" in str(content[i + 2]):
+                current_direction = "Direction_Y"
+            elif "Direction: X" in str(content[i + 2]):
+                current_direction = "Direction_X"
+
+            table_started = True
+            continue
+
+        if table_started:
+            if row.startswith("+-"):
+                plus_count += 1
+                if plus_count == 3:
+                    table_started = False
+                    content_started = False
+                    current_key = None
+                    current_direction = None
+                    plus_count = 0
+                continue
+            elif plus_count == 2:
+                content_started = True
+                continue
+
+            if content_started:
+                columns = [col.strip() for col in row.split("|") if col.strip()]
+                if columns and current_key and current_direction:
+                    table_dict.setdefault(current_key, {}).setdefault(current_direction, []).append(columns)
+
+    for key1 in table_dict:
+        for key2 in table_dict[key1]:
+            df_table = pd.DataFrame(table_dict[key1][key2])
+            df_table["Parameter"] = key1
+            df_table["Direction"] = key2
+            table_dict[key1][key2] = df_table
+
+    return table_dict
+
+
+def process_files(directory_path, output_path):
+    """
+    Reads CSV and TXC files from the directory structure, extracts tables,
+    and writes the processed results into an Excel file.
+
+    - **Loops through directories**: Extracts order evaluation data from multiple product folders.
+    - **Processes extracted content**: Uses the defined functions to process ORDER EVALUATION data.
+    - **Stores extracted tables**: Adds metadata columns (Product, Layer, Batch ID).
+    - **Writes results to an Excel file**: Saves different extracted tables in separate sheets.
+    """
+    all_results_T1 = []
+    all_results_T2 = []
+    all_results_T3 = []
+
+    for product in os.listdir(directory_path):
+        main_folder_path = os.path.join(directory_path, product)
+        if os.path.isdir(main_folder_path):
+            for folder_name in os.listdir(main_folder_path):
+                folder_path = os.path.join(main_folder_path, folder_name)
+                if os.path.isdir(folder_path):
+                    for filename in os.listdir(folder_path):
+                        if filename.endswith(".csv") or filename.endswith(".txc"):
+                            file_path = os.path.join(folder_path, filename)
+
+                            df = pd.read_csv(file_path) if filename.endswith(".csv") else pd.read_table(file_path)
+
+                            summary_df = Task_1_summary_extraction(df)
+                            table_content_T2 = Task_2_eval_order_SCD_1_3_5(df)
+                            table_content_T3 = extract_OEIII_WO_MCC_content(df)
+
+                            summary_df["Product"] = product
+                            summary_df["Layer"] = folder_name
+                            summary_df["Batch ID"] = filename
+                            all_results_T1.append(summary_df)
+
+                            for key, order_data in table_content_T2.items():
+                                for order, table_df in order_data.items():
+                                    table_df["Product"] = product
+                                    table_df["Layer"] = folder_name
+                                    table_df["Batch ID"] = filename
+                                    all_results_T2.append(table_df)
+
+                            for key, order_data in table_content_T3.items():
+                                for order, table_df in order_data.items():
+                                    table_df["Product"] = product
+                                    table_df["Layer"] = folder_name
+                                    table_df["Batch ID"] = filename
+                                    all_results_T3.append(table_df)
+
+    with pd.ExcelWriter(output_path) as writer:
+        pd.concat(all_results_T1, ignore_index=True).to_excel(writer, sheet_name="Task_1_Summary", index=False)
+        pd.concat(all_results_T2, ignore_index=True).to_excel(writer, sheet_name="Order_Evaluation", index=False)
+        pd.concat(all_results_T3, ignore_index=True).to_excel(writer, sheet_name="OEIII_MCC_WQ", index=False)
+
+    print(f"Processing completed. Results saved to {output_path}")
+
+
+directory_path = "path/to/your/data"
+output_path = "output.xlsx"
+process_files(directory_path, output_path)
